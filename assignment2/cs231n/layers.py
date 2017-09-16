@@ -365,6 +365,24 @@ def dropout_backward(dout, cache):
         dx = dout
     return dx
 
+def padding(x,pad1,pad2):
+    padded_x = np.zeros((x.shape[0],x.shape[1],x.shape[2]+2*pad1,x.shape[3]+2*pad2),dtype=np.float64)
+    padded_x[:,:,pad1:pad1+x.shape[2],pad2:pad2+x.shape[3]] = x
+    return padded_x
+
+def convolve_naive(x,w,b=None):
+    N, C, HH, WW = x.shape
+    F, _, _, _   = w.shape
+    
+    out= np.zeros((N,F))
+    
+    for i in range(w.shape[0]):
+        p = x*w[i]
+        p = np.sum(p,axis=(1,2,3))
+        out[:,i]=p
+    if b is not None:
+        out = out + b
+    return out
 
 def conv_forward_naive(x, w, b, conv_param):
     """
@@ -390,41 +408,94 @@ def conv_forward_naive(x, w, b, conv_param):
     - cache: (x, w, b, conv_param)
     """
     out = None
+   
     ###########################################################################
     # TODO: Implement the convolutional forward pass.                         #
     # Hint: you can use the function np.pad for padding.                      #
     ###########################################################################
-    pass
+    N,C,Hin,Win = x.shape
+    F,_,HH,WW   = w.shape
+    
+    P = conv_param.get('pad',0)
+    S = conv_param.get('stride',1)
+    
+    Hin_pad = Hin+2*P
+    Win_pad = Win+2*P
+    
+    H_out = 1 + (Hin_pad-HH)//S
+    W_out = 1 + (Win_pad-WW)//S
+    
+    x_pad = padding(x, P, P)
+    
+    out=np.zeros((N,F,H_out,W_out))
+    
+    for height in range(H_out):
+        top = height*S
+        bottom = top + HH
+        for width in range(W_out):
+            left = width*S
+            right = left + WW
+            out[:,:,height,width] = convolve_naive(x_pad[:,:,top:bottom,left:right],
+                                                 w,b)
+    
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
-    cache = (x, w, b, conv_param)
+    cache = (x_pad, w, b, conv_param)
     return out, cache
-
 
 def conv_backward_naive(dout, cache):
     """
-    A naive implementation of the backward pass for a convolutional layer.
+      A naive implementation of the backward pass for a convolutional layer.
 
-    Inputs:
-    - dout: Upstream derivatives.
-    - cache: A tuple of (x, w, b, conv_param) as in conv_forward_naive
+      Inputs:
+      - dout: Upstream derivatives.
+      - cache: A tuple of (x, w, b, conv_param) as in conv_forward_naive
 
-    Returns a tuple of:
-    - dx: Gradient with respect to x
-    - dw: Gradient with respect to w
-    - db: Gradient with respect to b
+      Returns a tuple of:
+      - dx: Gradient with respect to x
+      - dw: Gradient with respect to w
+      - db: Gradient with respect to b
     """
     dx, dw, db = None, None, None
-    ###########################################################################
-    # TODO: Implement the convolutional backward pass.                        #
-    ###########################################################################
-    pass
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    #############################################################################
+    ## TODO: Implement the convolutional backward pass.                          #
+    #############################################################################
+    x_pad, w, b, conv_param = cache
+    
+    P = conv_param['pad']
+    S = conv_param['stride']
+    
+    N, C, Hin_pad, Win_pad = x_pad.shape
+    Hin = Hin_pad - 2*P
+    Win = Win_pad - 2*P
+    
+    F, _, HH, WW =w.shape
+    _, _, H_out, W_out = dout.shape
+    
+    db = np.sum(dout,axis=(0,2,3))
+    
+    dw = np.zeros_like(w)
+    
+    dx_pad = np.zeros_like(x_pad)
+    
+    for height in range(H_out):
+        top = height * S
+        bottom = top + HH
+        for width in range(W_out):
+            left= width * S
+            right = left + WW
+            dout_h_w = dout[:,:,height,width]
+            dw += np.dot(dout_h_w.T,
+                         x_pad[:,:,top:bottom,left:right].reshape(N,-1)).reshape(F,C,HH,WW)
+            
+            dx_pad[:,:,top:bottom,left:right] += np.dot(dout_h_w,w.reshape(F,-1)).reshape(N,C,HH,WW)
+    
+    dx = dx_pad[:,:,P:-P,P:-P]
+    #############################################################################
+    #                             END OF YOUR CODE                              #
+    #############################################################################
     return dx, dw, db
-
 
 def max_pool_forward_naive(x, pool_param):
     """
@@ -441,11 +512,30 @@ def max_pool_forward_naive(x, pool_param):
     - out: Output data
     - cache: (x, pool_param)
     """
+    
     out = None
     ###########################################################################
     # TODO: Implement the max pooling forward pass                            #
     ###########################################################################
-    pass
+    PH = pool_param['pool_height']
+    PW = pool_param['pool_width']
+    S  = pool_param['stride']
+    
+    N, C, Hin, Win = x.shape
+    
+    H_out = 1 + (Hin-PH)//S
+    W_out = 1 + (Win-PW)//S
+    
+    out = np.zeros((N, C, H_out, W_out))
+    
+    for height in range(H_out):
+        top = height*S
+        bottom = top + PH
+        for width in range(W_out):
+            left = width*S
+            right = left + PW
+            out[:,:,height,width] = np.max(x[:,:,top:bottom,left:right],axis=(2,3))
+    
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -468,7 +558,31 @@ def max_pool_backward_naive(dout, cache):
     ###########################################################################
     # TODO: Implement the max pooling backward pass                           #
     ###########################################################################
-    pass
+    x, pool_param = cache
+    
+    PH = pool_param['pool_height']
+    PW = pool_param['pool_width']
+    S  = pool_param['stride']
+    
+    N, C, Hin, Win = x.shape
+    
+    H_out = 1 + (Hin-PH)//S
+    W_out = 1 + (Win-PW)//S
+   
+    dx = np.zeros_like(x)
+    
+    for height in range(H_out):
+        top = height*S
+        bottom = top + PH
+        for width in range(W_out):
+            dout_h_w = dout[:,:,height,width]
+            left = width*S
+            right = left + PW
+            view = x[:,:,top:bottom,left:right]
+            maxima = np.ones(view.shape)*np.max(view,axis=(2,3))[:,:,np.newaxis,np.newaxis]
+            view = view ==maxima
+            view = view.astype(np.float32)
+            dx[:,:,top:bottom,left:right] += dout_h_w[:,:,np.newaxis,np.newaxis]*view
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -506,7 +620,11 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     # version of batch normalization defined above. Your implementation should#
     # be very short; ours is less than five lines.                            #
     ###########################################################################
-    pass
+    N, C, H, W = x.shape
+    x = x.transpose(0,2,3,1)
+    x = x.reshape(-1,C)
+    out,cache = batchnorm_forward(x, gamma, beta, bn_param)
+    out = out.reshape(N, H, W, C ).transpose(0,3,1,2)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -536,7 +654,11 @@ def spatial_batchnorm_backward(dout, cache):
     # version of batch normalization defined above. Your implementation should#
     # be very short; ours is less than five lines.                            #
     ###########################################################################
-    pass
+    N, C, H, W = dout.shape
+    dout = dout.transpose(0,2,3,1)
+    dout = dout.reshape(-1,C)
+    dx, dgamma, dbeta = batchnorm_backward(dout, cache)
+    dx = dx.reshape(N, H, W, C ).transpose(0,3,1,2)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
